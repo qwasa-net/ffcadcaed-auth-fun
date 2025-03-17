@@ -6,8 +6,6 @@ services:
     stop_grace_period: 1s
     depends_on:
       - kdc
-    #ports:
-    #  - "3443:3443"
     volumes:
       - keytabs:/_keytabs
     environment:
@@ -16,7 +14,7 @@ services:
       - KRB5_TRACE=
     networks:
       - net
-    command: make run-service KEYTABS_DIR=/_keytabs
+    command: make run-service KEYTABS_DIR=/_keytabs SERVICE_HOST=service
 
   client:
     restart: no
@@ -40,15 +38,16 @@ services:
     image: ffcadcaed-kdc
     container_name: ffcadcaed-kdc
     stop_grace_period: 1s
-    # ports:
-    #  - "9988:88"
-    #  - "9749:749"
     volumes:
       - kdc:/var/kerberos/krb5kdc
       - keytabs:/_keytabs
     environment:
       - KRB5_CONFIG=/etc/krb5.conf
       - KRB5_TRACE=
+      - SERVICE_NAME=${SERVICE_NAME}
+      - SERVICE_HOST=service
+      - CLIENT_NAME=${CLIENT_NAME}
+      - CLIENT_PASS=${CLIENT_PASS}
     networks:
       - net
 

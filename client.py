@@ -18,41 +18,47 @@ import httpx_gssapi
 from jose import jwt
 
 
-def make_request(args):
+def make_request(params):
 
     headers = {}
     certs, auth, verify_ca = None, None, None
 
     # mTLS
-    if args.cert and args.key:
-        certs = (args.cert, args.key)
+    if params.cert and params.key:
+        certs = (params.cert, params.key)
 
     # SPNEGO
-    if args.negotiate:
-        auth = create_spnego_auth(args.service_name, args.realm, args.principal)
+    if params.negotiate:
+        auth = create_spnego_auth(params.service_name, params.realm, params.principal)
 
     # api key
-    if args.apikey_header:
-        headers[args.apikey_header] = f"{args.username}:{int(time.time())}"
+    if params.apikey_header:
+        headers[params.apikey_header] = f"{params.username}${params.password}"
 
     # jwt
-    if args.jwt_secret or args.jwt_private_key:
-        token = generate_jwt_token(args)
-        headers[args.jwt_header] = "bearer " + token
+    if params.jwt_header:
+        token = generate_jwt_token(params)
+        headers[params.jwt_header] = "bearer " + token
+
+    if params.basic_auth_header:
+        # Basic Auth header
+        user_pass = f"{params.username}:{params.password}"
+        user_pass_b64 = base64.b64encode(user_pass.encode("utf8")).decode("utf8")
+        headers[params.basic_auth_header] = f"Basic {user_pass_b64}"
 
     # hmac
-    if args.hmac_secret:
-        message = base64.b64encode(args.username.encode("utf8")).decode()
-        hmacsign = generate_hmac_signature(args.hmac_secret, message)
-        headers[args.hmac_header] = f"{message}:{hmacsign}"
+    if params.hmac_header:
+        message = base64.b64encode(params.username.encode("utf8")).decode()
+        hmacsign = generate_hmac_signature(params.password, message)
+        headers[params.hmac_header] = f"{message}:{hmacsign}"
 
     # server cert verification
-    if args.cacert:
-        verify_ca = ssl.create_default_context(cafile=args.cacert)
+    if params.cacert:
+        verify_ca = ssl.create_default_context(cafile=params.cacert)
 
     # set up client and make request
     with httpx.Client(auth=auth, verify=verify_ca, cert=certs) as client:
-        response = client.get(args.url, headers=headers)
+        response = client.get(params.url, headers=headers)
 
     return response
 
@@ -75,20 +81,20 @@ def generate_hmac_signature(secret_key, message):
     return signature
 
 
-def generate_jwt_token(args):
+def generate_jwt_token(params):
 
     payload = {
-        "sub": args.username,
-        "aud": args.service_name.split("/")[0],
+        "sub": params.username,
+        "aud": params.service_name.split("/")[0],
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600,
     }
 
-    if args.jwt_private_key:
-        secret_key = open(args.jwt_private_key).read()
+    if params.jwt_private_key:
+        secret_key = open(params.jwt_private_key).read()
         algorithm = "RS256"
     else:
-        secret_key = args.jwt_secret
+        secret_key = params.password
         algorithm = "HS256"
 
     token = jwt.encode(
@@ -136,6 +142,7 @@ def read_args():
 
     # client username
     parser.add_argument("--username", default="client")
+    parser.add_argument("--password", default="0123456789")
 
     # server cert verification
     parser.add_argument("--cacert", type=str, default=None)
@@ -150,14 +157,15 @@ def read_args():
     parser.add_argument("--realm", default=None)
     parser.add_argument("--principal", default="user")
 
+    # basic auth
+    parser.add_argument("--basic-auth-header", default="X-Basic-Authorization")
+
     # jwt
-    parser.add_argument("--jwt-secret", default=None)
     parser.add_argument("--jwt-private-key", default=None)
     parser.add_argument("--jwt-header", default="X-JWT")
 
     # hmac
     parser.add_argument("--hmac-header", default="X-HMAC")
-    parser.add_argument("--hmac-secret", default="0123456789")
 
     # api key
     parser.add_argument("--apikey-header", default="X-API-KEY")
@@ -167,6 +175,7 @@ def read_args():
     parser.add_argument("--headers", "-i", action="store_true")
 
     args, argv = parser.parse_known_args()
+
     return args
 
 

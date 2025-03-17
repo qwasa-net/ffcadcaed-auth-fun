@@ -10,9 +10,12 @@ DOCKER := DOCKER_BUILDKIT=1 BUILDKIT_PROGRESS=plain docker
 CERTS_DIR := _certs
 KEYTABS_DIR := _krbbrb
 
-SERVICE_NAME := SERVICE
-CLIENT_NAME := CLIENT
+MAGIC ?= 12345
 
+CLIENT_NAME := CLIENT-${MAGIC}
+CLIENT_PASS := PASSWORD-${MAGIC}
+
+SERVICE_NAME := SERVICE-${MAGIC}
 SERVICE_HOST := localhost
 SERVICE_PORT := 3443
 SERVICE_URL := https://$(SERVICE_HOST):$(SERVICE_PORT)/hallo-there/
@@ -36,6 +39,8 @@ venv:  ## virtualenv
 ##
 run-service:  ## run service
 	$(PYTHON) -u service.py \
+	--service-name $(SERVICE_NAME)/$(SERVICE_HOST) \
+	--username $(CLIENT_NAME) --password $(CLIENT_PASS)  \
 	--port $(SERVICE_PORT) \
 	--cert $(CERTS_DIR)/service.crt --key $(CERTS_DIR)/service.key \
 	--cacert $(CERTS_DIR)/root-ca.crt \
@@ -47,12 +52,13 @@ run-client-curl:  ## rrun curl client
 	$(SERVICE_URL) \
 	--cert $(CERTS_DIR)/client.crt --key $(CERTS_DIR)/client.key \
 	--cacert $(CERTS_DIR)/root-ca.crt \
-	--header "X-API-KEY: $(CLIENT_NAME):$(CLIENT_NAME)" \
+	--header "X-API-KEY: $(CLIENT_NAME):$(CLIENT_PASS)" \
 	--negotiate -u ":" --service-name $(SERVICE_NAME)
 
 run-client: ## run client
 	$(PYTHON) -u client.py -v -i \
 	$(SERVICE_URL) \
+	--username $(CLIENT_NAME) --password $(CLIENT_PASS)  \
 	--cert $(CERTS_DIR)/client.crt --key $(CERTS_DIR)/client.key \
 	--cacert $(CERTS_DIR)/root-ca.crt \
 	--jwt-private-key $(CERTS_DIR)/jwt-private.key \
@@ -61,12 +67,14 @@ run-client: ## run client
 kinit-init-client:
 	-kdestroy
 	-klist -k $(KEYTABS_DIR)/client.keytab
-	-kinit -V CLIENT -k -t $(KEYTABS_DIR)/client.keytab
+	-kinit -V $(CLIENT_NAME) -k -t $(KEYTABS_DIR)/client.keytab
 	-klist
 
 
 ##
 compose-up:
+	CLIENT_NAME=$(CLIENT_NAME) CLIENT_PASS=$(CLIENT_PASS) \
+	SERVICE_NAME=$(SERVICE_NAME) SERVICE_HOST=$(SERVICE_HOST) \
 	$(DOCKER) compose \
 	--file dockers/service-client-kdc.yml \
 	up \
@@ -132,7 +140,7 @@ certs-create:  ## create self-signed certs
 	# (3) client
 	openssl genpkey -algorithm RSA -out "$(CERTS_DIR)/client.key"
 	openssl req -new \
-	-subj "/O=DEV.LOCAL/CN=client-$(shell date +'%M%S')" \
+	-subj "/O=DEV.LOCAL/CN=$(CLIENT_NAME)" \
 	-key "$(CERTS_DIR)/client.key" \
 	-out "$(CERTS_DIR)/client.csr"
 	openssl x509 -req -days 999 -sha256 \

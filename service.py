@@ -50,22 +50,65 @@ class UAAuth(Authenticator):
         return handler.headers.get("User-Agent")
 
 
+class BasicAuth(Authenticator):
+    """This class provides a method for Basic authentication."""
+
+    def __init__(self, params, *args, **kwargs):
+        self.params = params
+
+    def __call__(self, handler):
+        auth = handler.headers.get(self.params.basic_auth_header)
+        log.debug("headers[%s]=%.255s", self.params.basic_auth_header, auth)
+
+        if not isinstance(auth, str) or " " not in auth:
+            return None
+        schema, token = auth.split(" ", maxsplit=1)
+        if schema.lower() != "basic":
+            return None
+        try:
+            decoded = base64.b64decode(token).decode("utf-8")
+            cn, secret = decoded.split(":", maxsplit=1)
+        except Exception as e:
+            log.error("basic_auth_error=%s", e)
+            return None
+        if self.validate_basic_auth(cn, secret):
+            return cn
+        else:
+            return None
+
+    def validate_basic_auth(self, cn, secret):
+        return all(
+            (
+                cn == self.params.username,
+                secret == self.params.password,
+            )
+        )
+
+
 class APIKeyAuth(Authenticator):
     """This class provides a method for API key authentication."""
 
-    def __init__(self, api_key_header):
-        self.api_key_header = api_key_header
+    def __init__(self, params, *args, **kwargs):
+        self.params = params
 
     def __call__(self, handler):
-        apikey = handler.headers.get(self.api_key_header)
-        if not isinstance(apikey, str) or ":" not in apikey:
+        apikey = handler.headers.get(self.params.apikey_header)
+        log.debug("headers[%s]=%.255s", self.params.apikey_header, apikey)
+        if not isinstance(apikey, str) or "$" not in apikey:
             return None
-        cn, secret = apikey.split(":", maxsplit=1)
-        self.validate_api_key(cn, secret)
-        return cn
+        cn, secret = apikey.split("$", maxsplit=1)
+        if self.validate_api_key(cn, secret):
+            return cn
+        else:
+            return None
 
     def validate_api_key(self, cn, secret):
-        return cn and secret
+        return all(
+            (
+                cn == self.params.username,
+                secret == self.params.password,
+            )
+        )
 
 
 class HMACAuth(Authenticator):
@@ -94,7 +137,7 @@ class HMACAuth(Authenticator):
 
         # sign to compare
         hsh = hmac.new(
-            self.params.hmac_secret.encode(),
+            self.params.password.encode(),
             msg.encode(),
             hashlib.sha256,
         )
@@ -119,8 +162,6 @@ class JWTAuth(Authenticator):
         try:
             return self.get_jwt_token(handler)
         except Exception as e:
-            log.exception("jwt_error=%s", e)
-            raise
             log.error("jwt_error=%s", e)
             return None
 
@@ -154,7 +195,7 @@ class JWTAuth(Authenticator):
                 "verify_aud": True,
                 "verify_sub": True,
             },
-            audience=self.params.service_name,
+            audience=self.params.service_name.split("/")[0],
         )
         log.debug("jwt_payload=%s", jwt_payload)
 
@@ -266,7 +307,7 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
             for auther in self.authers:
                 auth = auther(self)
                 if auth is None:
-                    log.error("[%s] %s", self.client(), auther.error_message)
+                    log.error("[%s] %s", self.format_client_ids(), auther.error_message)
                     if auther.is_required:
                         self.send_auth_error(401, auther.headers, auther.error_message)
                         return
@@ -282,10 +323,10 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
         It says hello to the client with all detected client IDs.
         """
 
-        log.info("[%s] GET %s", self.client(), self.path)
+        log.info("[%s] GET %s", self.format_client_ids(), self.path)
 
         # hello here
-        hello = f"Hallo there !!\n\n{self.client(True)}\n\n"
+        hello = f"Hallo there !!\n\n{self.format_client_ids(True)}\n\n"
         data = hello.encode("utf-8", errors="ignore")
 
         # just say it
@@ -300,15 +341,23 @@ class HTTPHandler(http.server.BaseHTTPRequestHandler):
 
         self.connection.close()
 
-    def client(self, names=False):
-        if names:
-            frmt, glue = lambda x: f"{x[0]: <16}: {x[1]}", "\n"
+    def format_client_ids(self, with_names=False):
+        if with_names:
+            frmt, glue = lambda x: f"[{x[0]}] {x[1][0]: <16}: {x[1][1]}", "\n"
         else:
-            frmt, glue = lambda x: str(x[1]), " ‖ "
-        return glue.join(map(frmt, filter(lambda x: bool(x[1]), self.client_ids.items())))
+            frmt, glue = lambda x: str(x[1][1]), "‖"
+        return glue.join(
+            map(
+                frmt,
+                enumerate(
+                    filter(lambda x: bool(x[1]), self.client_ids.items()),
+                    start=1,
+                ),
+            )
+        )
 
     def send_auth_error(self, error_code=401, headers=None, message=""):
-        log.error("[%s] %s %s", self.client(), error_code, message)
+        log.error("[%s] %s %s", self.format_client_ids(), error_code, message)
         self.send_response(error_code)
         for k, v in (headers or {}).items():
             self.send_header(k, v)
@@ -324,15 +373,17 @@ class ArgsHandler:
         self.klass = HTTPHandler
         self.params = params
         self.authenticators = [IPAuth(), UAAuth()]
+        if params.basic_auth_header:
+            self.authenticators.append(BasicAuth(params))
         if params.apikey_header:
-            self.authenticators.append(APIKeyAuth(params.apikey_header))
+            self.authenticators.append(APIKeyAuth(params))
         if params.mtls_verify:
             self.authenticators.append(MTLSAuth(params))
-        if params.jwt_secret or params.jwt_public_key:
+        if params.jwt_header:
             self.authenticators.append(JWTAuth(params))
         if params.krb_principal:
             self.authenticators.append(KerberosAuth(params))
-        if params.hmac_secret:
+        if params.hmac_header:
             self.authenticators.append(HMACAuth(params))
 
     def __call__(self, *args, **kwargs):
@@ -377,9 +428,16 @@ def main():
 
 
 def configure_logging(args):
+    if args.debug:
+        level = logging.DEBUG
+        format = "%(asctime)s [%(levelname)s] [%(module)s:%(funcName)s:%(lineno)s] %(message)s"
+    else:
+        level = logging.INFO
+        format = "%(asctime)s %(message)s"
+
     logging.basicConfig(
-        level=logging.DEBUG if args.debug else logging.INFO,
-        format="%(asctime)s [%(levelname)s] %(message)s",
+        level=level,
+        format=format,
         datefmt="%Y-%m-%d %H:%M:%S",
     )
     logging.getLogger("http.server").setLevel(logging.INFO)
@@ -396,6 +454,10 @@ def parse_args():
     # service name
     parser.add_argument("--service-name", default="SERVICE")
 
+    # client username (to validate)
+    parser.add_argument("--username", default="client")
+    parser.add_argument("--password", default="0123456789")
+
     # SSL
     parser.add_argument("--cert", default=None)
     parser.add_argument("--key", default=None)
@@ -404,6 +466,9 @@ def parse_args():
     # client mTLS
     parser.add_argument("--mtls-verify", type=int, default=ssl.CERT_OPTIONAL)
 
+    # basic auth
+    parser.add_argument("--basic-auth-header", default="X-Basic-Authorization")
+
     # krb
     parser.add_argument("--krb-principal", default="HTTP")
     parser.add_argument("--krb-keytab", default=None)
@@ -411,7 +476,6 @@ def parse_args():
     parser.add_argument("--krb-header", default="Authorization")
 
     # jwt
-    parser.add_argument("--jwt-secret", default=None)
     parser.add_argument("--jwt-public-key", default=None)
     parser.add_argument("--jwt-header", default="X-JWT")
 
@@ -420,7 +484,6 @@ def parse_args():
 
     # hmac
     parser.add_argument("--hmac-header", default="X-HMAC")
-    parser.add_argument("--hmac-secret", default="0123456789")
 
     # debug
     parser.add_argument("--debug", action="store_true")
