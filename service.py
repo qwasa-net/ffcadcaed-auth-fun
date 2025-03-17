@@ -58,14 +58,14 @@ class APIKeyAuth(Authenticator):
 
     def __call__(self, handler):
         apikey = handler.headers.get(self.api_key_header)
-        if not apikey:
+        if not isinstance(apikey, str) or ":" not in apikey:
             return None
-        cn, secret = apikey.split(":")
+        cn, secret = apikey.split(":", maxsplit=1)
         self.validate_api_key(cn, secret)
         return cn
 
     def validate_api_key(self, cn, secret):
-        return True
+        return cn and secret
 
 
 class HMACAuth(Authenticator):
@@ -119,6 +119,8 @@ class JWTAuth(Authenticator):
         try:
             return self.get_jwt_token(handler)
         except Exception as e:
+            log.exception("jwt_error=%s", e)
+            raise
             log.error("jwt_error=%s", e)
             return None
 
@@ -135,11 +137,23 @@ class JWTAuth(Authenticator):
         if schema.lower() != "bearer":
             return None
 
+        if self.params.jwt_public_key:
+            decryption_key = open(self.params.jwt_public_key).read()
+            algorithm = "RS256"
+        else:
+            decryption_key = self.params.jwt_secret
+            algorithm = "HS256"
+
         jwt_payload = jwt.decode(
             token,
-            self.params.jwt_secret,
-            algorithms=["HS256"],
-            options={"verify_exp": True, "verify_iss": True, "verify_aud": True},
+            decryption_key,
+            algorithms=[algorithm],
+            options={
+                "verify_exp": True,
+                "verify_iss": True,
+                "verify_aud": True,
+                "verify_sub": True,
+            },
             audience=self.params.service_name,
         )
         log.debug("jwt_payload=%s", jwt_payload)
@@ -314,7 +328,7 @@ class ArgsHandler:
             self.authenticators.append(APIKeyAuth(params.apikey_header))
         if params.mtls_verify:
             self.authenticators.append(MTLSAuth(params))
-        if params.jwt_secret:
+        if params.jwt_secret or params.jwt_public_key:
             self.authenticators.append(JWTAuth(params))
         if params.krb_principal:
             self.authenticators.append(KerberosAuth(params))
@@ -397,7 +411,8 @@ def parse_args():
     parser.add_argument("--krb-header", default="Authorization")
 
     # jwt
-    parser.add_argument("--jwt-secret", default="0123456789")
+    parser.add_argument("--jwt-secret", default=None)
+    parser.add_argument("--jwt-public-key", default=None)
     parser.add_argument("--jwt-header", default="X-JWT")
 
     # api key

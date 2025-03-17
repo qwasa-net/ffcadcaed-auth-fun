@@ -36,7 +36,7 @@ def make_request(args):
         headers[args.apikey_header] = f"{args.username}:{int(time.time())}"
 
     # jwt
-    if args.jwt_secret:
+    if args.jwt_secret or args.jwt_private_key:
         token = generate_jwt_token(args)
         headers[args.jwt_header] = "bearer " + token
 
@@ -76,19 +76,28 @@ def generate_hmac_signature(secret_key, message):
 
 
 def generate_jwt_token(args):
+
     payload = {
         "sub": args.username,
         "aud": args.service_name.split("/")[0],
         "iat": int(time.time()),
         "exp": int(time.time()) + 3600,
     }
-    secret_key = args.jwt_secret
+
+    if args.jwt_private_key:
+        secret_key = open(args.jwt_private_key).read()
+        algorithm = "RS256"
+    else:
+        secret_key = args.jwt_secret
+        algorithm = "HS256"
+
     token = jwt.encode(
         payload,
         secret_key,
-        algorithm="HS256",
-        headers={"typ": "JWT", "alg": "HS256"},
+        algorithm=algorithm,
+        headers={"typ": "JWT", "alg": algorithm},
     )
+
     return token
 
 
@@ -142,7 +151,8 @@ def read_args():
     parser.add_argument("--principal", default="user")
 
     # jwt
-    parser.add_argument("--jwt-secret", default="0123456789")
+    parser.add_argument("--jwt-secret", default=None)
+    parser.add_argument("--jwt-private-key", default=None)
     parser.add_argument("--jwt-header", default="X-JWT")
 
     # hmac

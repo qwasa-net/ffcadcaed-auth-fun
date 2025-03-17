@@ -39,6 +39,7 @@ run-service:  ## run service
 	--port $(SERVICE_PORT) \
 	--cert $(CERTS_DIR)/service.crt --key $(CERTS_DIR)/service.key \
 	--cacert $(CERTS_DIR)/root-ca.crt \
+	--jwt-public-key $(CERTS_DIR)/jwt-public.key \
 	--krb-keytab $(KEYTABS_DIR)/service.keytab --krb-principal $(SERVICE_NAME)
 
 run-client-curl:  ## rrun curl client
@@ -54,6 +55,7 @@ run-client: ## run client
 	$(SERVICE_URL) \
 	--cert $(CERTS_DIR)/client.crt --key $(CERTS_DIR)/client.key \
 	--cacert $(CERTS_DIR)/root-ca.crt \
+	--jwt-private-key $(CERTS_DIR)/jwt-private.key \
 	--negotiate --service-name $(SERVICE_NAME)/$(SERVICE_HOST) --principal $(CLIENT_NAME)
 
 kinit-init-client:
@@ -142,6 +144,11 @@ certs-create:  ## create self-signed certs
 	openssl x509 -in "$(CERTS_DIR)/root-ca.crt" -text -noout | grep -E "CN=|DNS:" | sed 's/ \+/ > /'
 	openssl x509 -in "$(CERTS_DIR)/service.crt" -text -noout | grep -E "CN=|DNS:" | sed 's/ \+/ > /'
 	openssl x509 -in "$(CERTS_DIR)/client.crt" -text -noout | grep -E "CN=|DNS:" | sed 's/ \+/ > /'
+
+	# jwt rsa keys
+	openssl genpkey -algorithm RSA -out "$(CERTS_DIR)/jwt-private.key"
+	openssl rsa -pubout -in "$(CERTS_DIR)/jwt-private.key" -out "$(CERTS_DIR)/jwt-public.key"
+
 
 ##
 dev-venv:  venv
