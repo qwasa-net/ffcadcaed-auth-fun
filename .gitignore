@@ -1,0 +1,13 @@
+_kakas/
+_certs/
+_krbbrb/
+.venv/
+
+*.pyc
+*.pyo
+*.pyd
+
+*.bak
+*.log
+
+.settings/
